@@ -49,6 +49,19 @@ Two commands set the persistent preferences from inside Pi:
   it as `/title-language zh`; `auto` (or `clear`) matches the
   conversation again. Any language name may be written in the config
   file directly.
+- `/title-status` — show the preferences in effect and the most
+  recent generation record in this session.
+
+## Generation records
+
+Every generation attempt leaves a `pi-auto-title` entry in the
+session file: when it ran, which model was requested and which
+layer chose it, the model the provider reports actually answering
+(with its response id when it sends one), and how the attempt
+ended — titled, failed, or skipped fail-closed with the reason.
+Nothing is written anywhere else, and the entries are not part of
+the conversation the model sees. Grep a session file for
+`pi-auto-title` to audit what named your sessions.
 
 Choices are stored in the extension's own file,
 `~/.pi/agent/pi-auto-title.json` (or `$PI_CODING_AGENT_DIR`), never in

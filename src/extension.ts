@@ -4,7 +4,7 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { configPath, loadPreferences, savePreferences } from "./config.ts";
-import { generateTitle } from "./generate.ts";
+import { generateTitle, type GenerationResult } from "./generate.ts";
 import { buildModelItems, pickModel, SESSION_MODEL_VALUE } from "./model-picker.ts";
 import {
 	isEnabled,
@@ -76,21 +76,25 @@ export default function (pi: ExtensionAPI) {
 
 			state.inFlight = true;
 			try {
-				const title = await generateTitle(ctx, {
+				const result = await generateTitle(ctx, {
 					promptText: excerpt.prompt,
 					replyText: excerpt.reply,
 					...preferenceInput(),
 				});
+				recordGeneration(pi, "retitle", result, result.title !== null);
 
-				if (!title) {
-					ctx.ui.notify("Could not generate a title.", "warning");
+				if (!result.title) {
+					ctx.ui.notify(
+						`Could not generate a title (${result.failure ?? "unknown reason"}).`,
+						"warning",
+					);
 					return;
 				}
 
-				pi.setSessionName(title);
-				state.titledByMe = title;
+				pi.setSessionName(result.title);
+				state.titledByMe = result.title;
 				state.stoodDown = false;
-				ctx.ui.notify(`Session titled: ${title}`, "info");
+				ctx.ui.notify(`Session titled: ${result.title}`, "info");
 			} finally {
 				state.inFlight = false;
 			}
@@ -150,6 +154,34 @@ export default function (pi: ExtensionAPI) {
 
 			savePreferences({ model: picked });
 			ctx.ui.notify(`Title model set to ${picked} (${configPath()}).`, "info");
+		},
+	});
+
+	pi.registerCommand("title-status", {
+		description: "Show the titling preferences and the last generation record",
+		handler: async (_args, ctx) => {
+			const lines = [modelStatus(), languageStatus(), `Config file: ${configPath()}`];
+			const record = lastRecord(ctx);
+
+			if (!record) {
+				lines.push("Last generation: none recorded in this session yet.");
+			} else if (record.outcome === "titled") {
+				lines.push(
+					`Last generation: ${record.at} (${record.trigger})`,
+					`  requested ${record.requested ?? "?"} (from ${record.source})` +
+						` · responded ${record.respondedBy ?? "?"}` +
+						(record.responseId ? ` · response ${record.responseId}` : "") +
+						` · titled "${record.title}"${record.applied ? "" : " (not applied)"}`,
+				);
+			} else {
+				lines.push(
+					`Last generation: ${record.at} (${record.trigger})`,
+					`  ${record.outcome} — ${record.reason ?? "unknown reason"}` +
+						(record.requested ? ` · requested ${record.requested} (from ${record.source})` : ""),
+				);
+			}
+
+			ctx.ui.notify(lines.join("\n"), "info");
 		},
 	});
 
@@ -255,21 +287,93 @@ async function settleTitling(
 
 	state.inFlight = true;
 	try {
-		const title = await generateTitle(ctx, {
+		const result = await generateTitle(ctx, {
 			promptText: excerpt.prompt,
 			replyText: excerpt.reply,
 			...preferenceInput(),
 		});
+		const applied = result.title !== null && !pi.getSessionName();
+		recordGeneration(pi, "auto", result, applied);
 
-		if (!title || pi.getSessionName()) {
+		if (!applied || !result.title) {
 			return;
 		}
 
-		pi.setSessionName(title);
-		state.titledByMe = title;
+		pi.setSessionName(result.title);
+		state.titledByMe = result.title;
 	} finally {
 		state.inFlight = false;
 	}
+}
+
+/** One generation attempt, as the session record keeps it. */
+interface TitleRecord {
+	at: string;
+	trigger: "auto" | "retitle";
+	requested: string | null;
+	source: string;
+	respondedBy: string | null;
+	responseId: string | null;
+	outcome: "titled" | "failed" | "skipped";
+	title?: string;
+	applied?: boolean;
+	reason?: string;
+}
+
+/**
+ * Leave the attempt's evidence in the session file, where it can be
+ * grepped and outlives the process: what was asked, which layer chose
+ * it, what the provider reports answering, and how it ended.
+ */
+function recordGeneration(
+	pi: ExtensionAPI,
+	trigger: "auto" | "retitle",
+	result: GenerationResult,
+	applied: boolean,
+): void {
+	const source = preferenceSource("model");
+	const record: TitleRecord = {
+		at: new Date().toISOString(),
+		trigger,
+		requested: result.requested,
+		source: source === "default" ? "session" : source,
+		respondedBy: result.respondedBy,
+		responseId: result.responseId,
+		outcome: result.title
+			? "titled"
+			: result.respondedBy || result.failure === "request failed"
+				? "failed"
+				: "skipped",
+	};
+
+	if (result.title) {
+		record.title = result.title;
+		record.applied = applied;
+	}
+
+	if (result.failure) {
+		record.reason = result.failure;
+	}
+
+	pi.appendEntry("pi-auto-title", record);
+}
+
+/** The most recent generation record in this session, if any. */
+function lastRecord(ctx: ExtensionContext): TitleRecord | null {
+	let found: TitleRecord | null = null;
+	for (const entry of ctx.sessionManager.getEntries()) {
+		const candidate = entry as {
+			type?: string;
+			customType?: string;
+			data?: TitleRecord;
+		};
+
+		if (candidate.type === "custom" && candidate.customType === "pi-auto-title") {
+			found = candidate.data ?? found;
+		}
+	}
+
+	return found;
 }
 
 /** The first user prompt and the first assistant reply, bounded in size. */

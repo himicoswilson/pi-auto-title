@@ -37,20 +37,51 @@ export interface GenerateInput {
 	language?: string;
 }
 
+/** Why a generation produced no title, in words a log can carry. */
+export type FailureReason =
+	| "named model not found"
+	| "named model has no auth"
+	| "no session model"
+	| "session model has no auth"
+	| "request failed"
+	| "empty title";
+
 /**
- * Ask a model for a session title. Returns null when there is no model to
- * ask, the call fails or times out, or nothing title-worthy comes back.
- * Never throws.
+ * The outcome of one generation attempt: the title when there is one,
+ * plus the evidence of what was asked and what actually answered —
+ * the material the session record is written from.
+ */
+export interface GenerationResult {
+	title: string | null;
+	/** The model ref the attempt meant to use. */
+	requested: string | null;
+	/** The model the provider reports answering, when a call happened. */
+	respondedBy: string | null;
+	responseId: string | null;
+	failure: FailureReason | null;
+}
+
+/**
+ * Ask a model for a session title. Never throws; every way the attempt
+ * can end without a title is named in the result's failure.
  */
 export async function generateTitle(
 	ctx: ExtensionContext,
 	input: GenerateInput,
-): Promise<string | null> {
-	const model = resolveTitleModel(ctx, input.modelOverride);
-	if (!model) {
-		return null;
+): Promise<GenerationResult> {
+	const resolved = resolveTitleModel(ctx, input.modelOverride);
+	if (!resolved.model) {
+		return {
+			title: null,
+			requested: resolved.requested,
+			respondedBy: null,
+			responseId: null,
+			failure: resolved.failure,
+		};
 	}
 
+	const { model } = resolved;
+	const requested = `${model.provider}/${model.id}`;
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), GENERATE_TIMEOUT_MS);
 
@@ -74,45 +105,74 @@ export async function generateTitle(
 			},
 		);
 
+		const respondedBy = `${response.provider}/${response.responseModel ?? response.model}`;
 		const text = (response.content ?? [])
 			.filter((block): block is { type: "text"; text: string } => block.type === "text")
 			.map((block) => block.text)
 			.join("\n");
 
-		return sanitizeTitle(text, maxLengthFromEnv(process.env.PI_AUTO_TITLE_MAX_LENGTH));
+		const title = sanitizeTitle(text, maxLengthFromEnv(process.env.PI_AUTO_TITLE_MAX_LENGTH));
+		return {
+			title,
+			requested,
+			respondedBy,
+			responseId: response.responseId ?? null,
+			failure: title ? null : "empty title",
+		};
 	} catch {
-		return null;
+		return {
+			title: null,
+			requested,
+			respondedBy: null,
+			responseId: null,
+			failure: "request failed",
+		};
 	} finally {
 		clearTimeout(timer);
 	}
 }
 
+type RegistryModel = NonNullable<ReturnType<ExtensionContext["modelRegistry"]["find"]>>;
+
+/**
+ * Pick the model to title with, fail-closed: a named model that cannot
+ * be used ends the attempt here — with the reason — rather than
+ * quietly spending the session's own model instead.
+ */
 function resolveTitleModel(
 	ctx: ExtensionContext,
 	modelOverride: string | undefined,
-): ReturnType<ExtensionContext["modelRegistry"]["find"]> | null {
+): { model: RegistryModel; requested: string } | { model: null; requested: string | null; failure: FailureReason } {
 	const registry = ctx.modelRegistry;
 
 	if (modelOverride) {
 		const ref = parseModelRef(modelOverride);
-		if (!ref) {
-			return null;
+		const model = ref ? registry.find(ref.provider, ref.modelId) : undefined;
+		if (!model) {
+			return { model: null, requested: modelOverride, failure: "named model not found" };
 		}
 
-		const model = registry.find(ref.provider, ref.modelId);
-		if (!model || !registry.hasConfiguredAuth(model)) {
-			return null;
+		if (!registry.hasConfiguredAuth(model)) {
+			return { model: null, requested: modelOverride, failure: "named model has no auth" };
 		}
 
-		return model;
+		return { model, requested: modelOverride };
 	}
 
 	const model = ctx.model;
-	if (!model || !registry.hasConfiguredAuth(model)) {
-		return null;
+	if (!model) {
+		return { model: null, requested: null, failure: "no session model" };
 	}
 
-	return model;
+	if (!registry.hasConfiguredAuth(model)) {
+		return {
+			model: null,
+			requested: `${model.provider}/${model.id}`,
+			failure: "session model has no auth",
+		};
+	}
+
+	return { model, requested: `${model.provider}/${model.id}` };
 }
 
 function titleUserMessage(input: GenerateInput): string {
