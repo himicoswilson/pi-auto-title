@@ -5,6 +5,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { configPath, loadPreferences, savePreferences } from "./config.ts";
 import { generateTitle } from "./generate.ts";
+import { buildModelItems, pickModel, SESSION_MODEL_VALUE } from "./model-picker.ts";
 import {
 	isEnabled,
 	LANGUAGE_CHOICES,
@@ -120,27 +121,35 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			const usable = [...new Set(
-				ctx.modelRegistry
-					.getAll()
-					.filter((model) => ctx.modelRegistry.hasConfiguredAuth(model))
-					.map((model) => `${model.provider}/${model.id}`),
-			)].sort();
+			const records = ctx.modelRegistry
+				.getAll()
+				.filter((model) => ctx.modelRegistry.hasConfiguredAuth(model))
+				.map((model) => ({
+					provider: model.provider,
+					id: model.id,
+					contextWindow: model.contextWindow,
+					reasoning: model.reasoning,
+				}));
+			const effective = resolvePreferences(
+				{ model: process.env[MODEL_ENV] },
+				loadPreferences(),
+			).model;
 
-			const picked = await ctx.ui.select("Title model", [
-				"Use the session model (default)",
-				...usable,
-			]);
+			const picked = await pickModel(ctx, buildModelItems(records, effective));
 
 			if (picked === undefined) {
 				ctx.ui.notify(modelStatus(), "info");
 				return;
 			}
 
-			savePreferences({
-				model: picked === "Use the session model (default)" ? undefined : picked,
-			});
-			ctx.ui.notify(`Title model: ${picked} (${configPath()}).`, "info");
+			if (picked === SESSION_MODEL_VALUE) {
+				savePreferences({ model: undefined });
+				ctx.ui.notify("Title model cleared; the session model is used.", "info");
+				return;
+			}
+
+			savePreferences({ model: picked });
+			ctx.ui.notify(`Title model set to ${picked} (${configPath()}).`, "info");
 		},
 	});
 

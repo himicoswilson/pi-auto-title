@@ -40,8 +40,9 @@ be titled keeps whatever name it has, including none.
 
 Two commands set the persistent preferences from inside Pi:
 
-- `/title-model` — pick the model titles are generated with from the
-  models that have auth configured, or run it as
+- `/title-model` — pick the model titles are generated with in a
+  searchable picker styled after Pi's own `/model` page (type to
+  filter; the entry currently in effect is marked), or run it as
   `/title-model provider/model-id`; `clear` returns to the session
   model.
 - `/title-language` — pick the language titles are written in, or run
