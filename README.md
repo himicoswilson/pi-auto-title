@@ -31,18 +31,42 @@ be titled keeps whatever name it has, including none.
 - `/retitle` regenerates the title on demand, even after you renamed the
   session by hand; the new automatic name becomes the one the extension
   tracks.
-- Setting `PI_AUTO_TITLE_MODEL` to a model that cannot be resolved or has
-  no configured auth disables titling rather than falling back to the
-  session's model. Quota is never spent somewhere you did not ask.
+- A titling model named by the environment or the config file that
+  cannot be resolved or has no configured auth disables titling rather
+  than falling back to the session's model. Quota is never spent
+  somewhere you did not ask.
 
 ## Configuration
 
-Environment variables only; nothing is written to `settings.json`.
+Two commands set the persistent preferences from inside Pi:
+
+- `/title-model` — pick the model titles are generated with from the
+  models that have auth configured, or run it as
+  `/title-model provider/model-id`; `clear` returns to the session
+  model.
+- `/title-language` — pick the language titles are written in, or run
+  it as `/title-language zh`; `auto` (or `clear`) matches the
+  conversation again. Any language name may be written in the config
+  file directly.
+
+Choices are stored in the extension's own file,
+`~/.pi/agent/pi-auto-title.json` (or `$PI_CODING_AGENT_DIR`), never in
+Pi's `settings.json`:
+
+```json
+{ "model": "openrouter/deepseek/deepseek-chat", "language": "en" }
+```
+
+Both keys are optional, and the file may be edited by hand — it is
+re-read whenever a title is generated. Resolution is key by key:
+an environment variable beats the config file, which beats the
+default (the session model; the conversation's language).
 
 | Variable                 | Default | Description                                                        |
 | ------------------------ | ------- | ------------------------------------------------------------------ |
 | `PI_AUTO_TITLE`          | on      | Set to `0`, `false`, `off`, or `no` to disable titling entirely.   |
-| `PI_AUTO_TITLE_MODEL`    | unset   | `provider/model-id` to title with; the session model is used when unset. |
+| `PI_AUTO_TITLE_MODEL`    | unset   | `provider/model-id` to title with; overrides the config file.      |
+| `PI_AUTO_TITLE_LANGUAGE` | unset   | Language to title in (`en`, `zh`, `Japanese`, …); overrides the config file. |
 | `PI_AUTO_TITLE_MAX_LENGTH` | `60`  | Maximum title length in characters.                                |
 
 ## Development

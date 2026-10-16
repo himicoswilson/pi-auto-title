@@ -7,20 +7,34 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	GENERATE_MAX_TOKENS,
 	GENERATE_TIMEOUT_MS,
+	languageName,
 	maxLengthFromEnv,
 	parseModelRef,
 	sanitizeTitle,
 } from "./policy.ts";
 
-const TITLE_SYSTEM_PROMPT =
-	"Name this chat session. Reply with ONLY a short title: at most 8 English " +
-	"words or 15 Chinese characters. Use the same language as the user's message. " +
-	"No quotation marks, no trailing punctuation, no explanation.";
+/**
+ * The instruction the titling model works under. A named language pins
+ * the title's language; null leaves it to follow the conversation.
+ */
+export function titleSystemPrompt(language: string | null): string {
+	const inLanguage = language
+		? `Write the title in ${language}.`
+		: "Use the same language as the user's message.";
+
+	return (
+		"Name this chat session. Reply with ONLY a short title, at most " +
+		`about 8 words long. ${inLanguage} ` +
+		"No quotation marks, no trailing punctuation, no explanation."
+	);
+}
 
 export interface GenerateInput {
 	promptText: string;
 	replyText?: string;
 	modelOverride?: string;
+	/** Raw language preference; normalized by languageName. */
+	language?: string;
 }
 
 /**
@@ -44,7 +58,7 @@ export async function generateTitle(
 		const response = await ctx.modelRegistry.complete(
 			model,
 			{
-				systemPrompt: TITLE_SYSTEM_PROMPT,
+				systemPrompt: titleSystemPrompt(languageName(input.language)),
 				messages: [
 					{
 						role: "user",

@@ -1,6 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { isEnabled, maxLengthFromEnv, parseModelRef, sanitizeTitle } from "../src/policy.ts";
+import {
+	isEnabled,
+	languageName,
+	maxLengthFromEnv,
+	parseModelRef,
+	resolvePreferences,
+	sanitizeTitle,
+} from "../src/policy.ts";
 
 describe("sanitizeTitle", () => {
 	it("returns the title unchanged when it is already clean", () => {
@@ -97,5 +104,51 @@ describe("maxLengthFromEnv", () => {
 	it("parses a positive integer", () => {
 		assert.equal(maxLengthFromEnv("100"), 100);
 		assert.equal(maxLengthFromEnv("45.9"), 45);
+	});
+});
+
+describe("languageName", () => {
+	it("leaves unset and auto to the conversation", () => {
+		assert.equal(languageName(undefined), null);
+		assert.equal(languageName(""), null);
+		assert.equal(languageName("auto"), null);
+		assert.equal(languageName(" Auto "), null);
+	});
+
+	it("names the known languages however they are spelled", () => {
+		assert.equal(languageName("en"), "English");
+		assert.equal(languageName("English"), "English");
+		assert.equal(languageName("zh"), "Simplified Chinese");
+		assert.equal(languageName("chinese"), "Simplified Chinese");
+		assert.equal(languageName("zh-TW"), "Traditional Chinese");
+		assert.equal(languageName("ja"), "Japanese");
+		assert.equal(languageName("Korean"), "Korean");
+	});
+
+	it("carries an unknown language verbatim", () => {
+		assert.equal(languageName("Klingon"), "Klingon");
+	});
+});
+
+describe("resolvePreferences", () => {
+	it("prefers the higher layer key by key", () => {
+		assert.deepEqual(
+			resolvePreferences(
+				{ model: "a/b" },
+				{ model: "c/d", language: "zh" },
+			),
+			{ model: "a/b", language: "zh" },
+		);
+	});
+
+	it("treats blank values as unset", () => {
+		assert.deepEqual(
+			resolvePreferences({ language: "  " }, { language: "en" }),
+			{ model: undefined, language: "en" },
+		);
+		assert.deepEqual(resolvePreferences({}, {}), {
+			model: undefined,
+			language: undefined,
+		});
 	});
 });

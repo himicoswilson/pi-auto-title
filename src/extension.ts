@@ -3,11 +3,22 @@
 // generate.ts; the rules that keep it out of the user's way live below.
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { configPath, loadPreferences, savePreferences } from "./config.ts";
 import { generateTitle } from "./generate.ts";
-import { isEnabled, PROMPT_MAX_CHARS, REPLY_MAX_CHARS } from "./policy.ts";
+import {
+	isEnabled,
+	LANGUAGE_CHOICES,
+	languageName,
+	parseModelRef,
+	PROMPT_MAX_CHARS,
+	REPLY_MAX_CHARS,
+	resolvePreferences,
+	type TitlePreferences,
+} from "./policy.ts";
 
 const ENABLE_ENV = "PI_AUTO_TITLE";
 const MODEL_ENV = "PI_AUTO_TITLE_MODEL";
+const LANGUAGE_ENV = "PI_AUTO_TITLE_LANGUAGE";
 
 /** Per-session state. Reset whenever a session starts. */
 interface TitlerState {
@@ -67,7 +78,7 @@ export default function (pi: ExtensionAPI) {
 				const title = await generateTitle(ctx, {
 					promptText: excerpt.prompt,
 					replyText: excerpt.reply,
-					modelOverride: process.env[MODEL_ENV],
+					...preferenceInput(),
 				});
 
 				if (!title) {
@@ -84,6 +95,134 @@ export default function (pi: ExtensionAPI) {
 			}
 		},
 	});
+
+	pi.registerCommand("title-model", {
+		description: "Show or set the model titles are generated with",
+		handler: async (args, ctx) => {
+			const written = args.trim();
+
+			if (written === "clear") {
+				savePreferences({ model: undefined });
+				ctx.ui.notify("Title model cleared; the session model is used.", "info");
+				return;
+			}
+
+			if (written !== "") {
+				const ref = parseModelRef(written);
+				const model = ref ? ctx.modelRegistry.find(ref.provider, ref.modelId) : undefined;
+				if (!ref || !model || !ctx.modelRegistry.hasConfiguredAuth(model)) {
+					ctx.ui.notify(`Not a usable model: ${written}`, "warning");
+					return;
+				}
+
+				savePreferences({ model: written });
+				ctx.ui.notify(`Title model set to ${written} (${configPath()}).`, "info");
+				return;
+			}
+
+			const usable = [...new Set(
+				ctx.modelRegistry
+					.getAll()
+					.filter((model) => ctx.modelRegistry.hasConfiguredAuth(model))
+					.map((model) => `${model.provider}/${model.id}`),
+			)].sort();
+
+			const picked = await ctx.ui.select("Title model", [
+				"Use the session model (default)",
+				...usable,
+			]);
+
+			if (picked === undefined) {
+				ctx.ui.notify(modelStatus(), "info");
+				return;
+			}
+
+			savePreferences({
+				model: picked === "Use the session model (default)" ? undefined : picked,
+			});
+			ctx.ui.notify(`Title model: ${picked} (${configPath()}).`, "info");
+		},
+	});
+
+	pi.registerCommand("title-language", {
+		description: "Show or set the language titles are generated in",
+		handler: async (args, ctx) => {
+			const written = args.trim();
+
+			if (written === "clear" || written.toLowerCase() === "auto") {
+				savePreferences({ language: undefined });
+				ctx.ui.notify("Title language cleared; titles match the conversation.", "info");
+				return;
+			}
+
+			if (written !== "") {
+				savePreferences({ language: written });
+				ctx.ui.notify(
+					`Title language set to ${languageName(written) ?? written} (${configPath()}).`,
+					"info",
+				);
+				return;
+			}
+
+			const auto = "Auto (match the conversation)";
+			const picked = await ctx.ui.select("Title language", [
+				auto,
+				...LANGUAGE_CHOICES.map((choice) => choice.label),
+			]);
+
+			if (picked === undefined) {
+				ctx.ui.notify(languageStatus(), "info");
+				return;
+			}
+
+			const choice = LANGUAGE_CHOICES.find((entry) => entry.label === picked);
+			savePreferences({ language: picked === auto ? undefined : choice?.code });
+			ctx.ui.notify(`Title language: ${picked} (${configPath()}).`, "info");
+		},
+	});
+}
+
+/** The preferences generation runs under: environment over config file. */
+function preferenceInput(): { modelOverride?: string; language?: string } {
+	const prefs = resolvePreferences(
+		{ model: process.env[MODEL_ENV], language: process.env[LANGUAGE_ENV] },
+		loadPreferences(),
+	);
+
+	return { modelOverride: prefs.model, language: prefs.language };
+}
+
+/** Which layer states a preference: the environment, the file, or neither. */
+function preferenceSource(key: keyof TitlePreferences): string {
+	const env = key === "model" ? process.env[MODEL_ENV] : process.env[LANGUAGE_ENV];
+	if (env?.trim()) {
+		return "environment";
+	}
+
+	return loadPreferences()[key] ? "config file" : "default";
+}
+
+function modelStatus(): string {
+	const prefs = resolvePreferences(
+		{ model: process.env[MODEL_ENV] },
+		loadPreferences(),
+	);
+
+	return prefs.model
+		? `Title model: ${prefs.model} (from ${preferenceSource("model")})`
+		: "Title model: the session model (default)";
+}
+
+function languageStatus(): string {
+	const prefs = resolvePreferences(
+		{ language: process.env[LANGUAGE_ENV] },
+		loadPreferences(),
+	);
+	const name = languageName(prefs.language);
+
+	return name
+		? `Title language: ${name} (from ${preferenceSource("language")})`
+		: "Title language: auto (matches the conversation)";
 }
 
 /** Title once, after the first settled turn, then never again on its own. */
@@ -110,7 +249,7 @@ async function settleTitling(
 		const title = await generateTitle(ctx, {
 			promptText: excerpt.prompt,
 			replyText: excerpt.reply,
-			modelOverride: process.env[MODEL_ENV],
+			...preferenceInput(),
 		});
 
 		if (!title || pi.getSessionName()) {
