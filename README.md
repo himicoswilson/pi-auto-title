@@ -9,7 +9,7 @@ opening exchange. The first message is never delayed, blocked, or rewritten.
 ## Install
 
 ```sh
-pi install git:github.com/himicoswilson/pi-auto-title
+pi install npm:pi-auto-title
 ```
 
 ## Why not in the message path
